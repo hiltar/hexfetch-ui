@@ -47,7 +47,14 @@ type Miner struct {
     Status    string  `json:"status,omitempty"`
 }
 
+type Config struct {
+    LiveDataFrequency int `json:"liveDataFrequency"`
+}
+
+
 const dateLayout = "02-01-2006" // DD-MM-YYYY
+const defaultLiveDataFrequency = 15 // Default frequency in minutes
+
 
 // Data Fetching and Management Functions
 
@@ -161,6 +168,37 @@ func saveMiners(miners []Miner) error {
     encoder := json.NewEncoder(file)
     encoder.SetIndent("", "  ")
     return encoder.Encode(miners)
+}
+
+func loadConfig() (Config, error) {
+    file, err := os.Open("settings/config.json")
+    if err != nil {
+        if os.IsNotExist(err) {
+            return Config{LiveDataFrequency: defaultLiveDataFrequency}, nil
+        }
+        return Config{}, err
+    }
+    defer file.Close()
+    var config Config
+    err = json.NewDecoder(file).Decode(&config)
+    if err != nil {
+        return Config{}, err
+    }
+    if config.LiveDataFrequency <= 0 {
+        config.LiveDataFrequency = defaultLiveDataFrequency
+    }
+    return config, nil
+}
+
+func saveConfig(config Config) error {
+    file, err := os.Create("settings/config.json")
+    if err != nil {
+        return err
+    }
+    defer file.Close()
+    encoder := json.NewEncoder(file)
+    encoder.SetIndent("", "  ")
+    return encoder.Encode(config)
 }
 
 // Utility Functions
@@ -399,7 +437,7 @@ func createLiveDataTab() fyne.CanvasObject {
             log.Println("Error fetching live data:", err)
             return
         }
-        priceLabel.SetText(fmt.Sprintf("HEX Price: $%.2f", data.PricePulsechain))
+        priceLabel.SetText(fmt.Sprintf("HEX Price: $%.4f", data.PricePulsechain))
         tsharePriceLabel.SetText(fmt.Sprintf("T-Share Price: $%.2f", data.TsharePricePulsechain))
         tshareRateLabel.SetText(fmt.Sprintf("T-Share Rate: %s", formatWithCommas(int(data.TshareRateHEXPulsechain))))
         penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
@@ -410,14 +448,20 @@ func createLiveDataTab() fyne.CanvasObject {
     updateFunc() // Initial update
 
     go func() {
+        config, err := loadConfig()
+        if err != nil {
+            log.Println("Error loading config:", err)
+            config.LiveDataFrequency = defaultLiveDataFrequency
+        }
         for {
-            time.Sleep(15 * time.Minute)
+            time.Sleep(time.Duration(config.LiveDataFrequency) * time.Minute)
             updateFunc()
         }
     }()
 
     return container
 }
+
 
 func createChartTab() fyne.CanvasObject {
     selectField := widget.NewSelect([]string{"Price", "Rate", "Payout"}, nil)
@@ -509,6 +553,31 @@ func createSettingsTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.C
         refreshTabs()
     })
 
+    // Load current config to display current frequency
+    config, err := loadConfig()
+    if err != nil {
+        log.Println("Error loading config:", err)
+        config.LiveDataFrequency = defaultLiveDataFrequency
+    }
+    frequencyEntry := widget.NewEntry()
+    frequencyEntry.SetPlaceHolder("Live Data Update Frequency (minutes)")
+    frequencyEntry.SetText(fmt.Sprintf("%d", config.LiveDataFrequency))
+
+    saveFrequencyButton := widget.NewButton("Save Frequency", func() {
+        frequency, err := strconv.Atoi(frequencyEntry.Text)
+        if err != nil || frequency <= 0 {
+            dialog.ShowError(fmt.Errorf("Frequency must be a positive integer"), w)
+            return
+        }
+        config.LiveDataFrequency = frequency
+        if err := saveConfig(config); err != nil {
+            log.Println("Error saving config:", err)
+            dialog.ShowError(fmt.Errorf("Failed to save frequency"), w)
+            return
+        }
+        dialog.ShowInformation("Success", fmt.Sprintf("Live data update frequency set to %d minutes", frequency), w)
+    })
+
     minersList := container.NewVBox()
     for i := range miners {
         i := i // Capture range variable
@@ -528,7 +597,10 @@ func createSettingsTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.C
     }
 
     return container.NewVBox(
-        widget.NewLabel("Add New Miner"),
+        widget.NewLabel("Live Data Settings"),
+        frequencyEntry,
+        saveFrequencyButton,
+        widget.NewLabel("\nAdd New Miner"),
         startDateEntry,
         endDateEntry,
         tSharesEntry,
@@ -575,21 +647,5 @@ func main() {
 
     // Initial tab setup
     refreshTabs()
-
-    // Handle empty miners.json
-    if len(miners) == 0 {
-        dialog.ShowConfirm("Profile is Empty", "Profile is empty. Do you want to add HEX miners?", func(yes bool) {
-            if yes {
-                // If yes, user goes to Settings tab manually
-            } else {
-                miners = []Miner{{TShares: 0}}
-                if err := saveMiners(miners); err != nil {
-                    log.Println("Error saving initial miners:", err)
-                }
-                refreshTabs()
-            }
-        }, w)
-    }
-
     w.ShowAndRun()
 }
