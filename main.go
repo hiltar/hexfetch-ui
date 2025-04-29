@@ -119,7 +119,7 @@ func fetchHEXJSON() (HEXJSON, error) {
 }
 
 func fetchLiveData() (LiveData, error) {
-    resp, err := http.Get("https://hexFans.com/livedata")
+    resp, err := http.Get("https://hexdailystats.com/livedata")
     if err != nil {
         return LiveData{}, err
     }
@@ -310,7 +310,7 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
 
     // Use cached live data
     liveDataMutex.Lock()
-    price := latestLiveData.PricePulsechain
+    price := latestLiveData.TsharePricePulsechain
     liveDataMutex.Unlock()
     totalValueLabel := widget.NewLabel(fmt.Sprintf("Total T-Shares Value: $%.2f", totalTShares*price))
 
@@ -455,28 +455,6 @@ func createLiveDataTab() fyne.CanvasObject {
     payoutLabel := widget.NewLabel("Payout Per T-Share: 0.0")
     beatLabel := widget.NewLabel("Beat: 0")
 
-    // Channel to signal updates
-    updateChan := make(chan LiveData, 1)
-
-    // Custom trigger for updates
-    trigger := newUpdateTrigger()
-    trigger.Hide()
-
-    // Update labels when triggered (runs on main thread)
-    trigger.onTapped = func(_ *fyne.PointEvent) {
-        select {
-        case data := <-updateChan:
-            priceLabel.SetText(fmt.Sprintf("Price: $%.4f", data.PricePulsechain))
-            tsharePriceLabel.SetText(fmt.Sprintf("T-Share Price: $%.2f", data.TsharePricePulsechain))
-            tshareRateLabel.SetText(fmt.Sprintf("T-Share Rate: %s", formatWithCommas(int(data.TshareRateHEXPulsechain))))
-            penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
-            payoutLabel.SetText(fmt.Sprintf("Payout Per T-Share: %.1f", data.PayoutPerTsharePulsechain))
-            beatLabel.SetText(fmt.Sprintf("Beat: %s", formatLongWithCommas(data.Beat)))
-        default:
-            // No update pending
-        }
-    }
-
     // Initial update
     liveDataMutex.Lock()
     data := latestLiveData
@@ -491,7 +469,7 @@ func createLiveDataTab() fyne.CanvasObject {
     // Start a ticker to periodically update the labels
     ctx, cancel := context.WithCancel(context.Background())
     go func() {
-        ticker := time.NewTicker(5 * time.Second) // Update every 5 seconds
+        ticker := time.NewTicker(time.Minute) // Update every minute
         defer ticker.Stop()
         for {
             select {
@@ -499,13 +477,16 @@ func createLiveDataTab() fyne.CanvasObject {
                 liveDataMutex.Lock()
                 data := latestLiveData
                 liveDataMutex.Unlock()
-                select {
-                case updateChan <- data: // Non-blocking send
-                    trigger.Tapped(&fyne.PointEvent{Position: fyne.NewPos(0, 0)})
-                default:
-                    // Skip if channel is full
-                }
+                fyne.DoAndWait(func() {
+                    priceLabel.SetText(fmt.Sprintf("Price: $%.4f", data.PricePulsechain))
+                    tsharePriceLabel.SetText(fmt.Sprintf("T-Share Price: $%.2f", data.TsharePricePulsechain))
+                    tshareRateLabel.SetText(fmt.Sprintf("T-Share Rate: %s", formatWithCommas(int(data.TshareRateHEXPulsechain))))
+                    penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
+                    payoutLabel.SetText(fmt.Sprintf("Payout Per T-Share: %.1f", data.PayoutPerTsharePulsechain))
+                    beatLabel.SetText(fmt.Sprintf("Beat: %s", formatLongWithCommas(data.Beat)))
+                })
             case <-ctx.Done():
+                log.Println("Ticker stopped")
                 return
             }
         }
@@ -521,7 +502,6 @@ func createLiveDataTab() fyne.CanvasObject {
         penaltiesLabel,
         payoutLabel,
         beatLabel,
-        trigger, // Include hidden trigger in the layout
     )
 }
 
@@ -851,7 +831,7 @@ func main() {
 
     var refreshTabs func()
     refreshTabs = func() {
-        miners, _ := loadMiners()
+        miners, _ = loadMiners()
         profileTab := container.NewTabItem("Profile", createProfileTab(miners, w, refreshTabs))
         liveDataTab := container.NewTabItem("Live Data", createLiveDataTab())
         chartTab := container.NewTabItem("Chart", createChartTab())
