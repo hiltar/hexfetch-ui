@@ -2,12 +2,14 @@ package main
 
 import (
     "bytes"
+    "context"
     "encoding/json"
     "fmt"
     "log"
     "net/http"
     "os"
     "strconv"
+    "sync"
     "time"
 
     "fyne.io/fyne/v2"
@@ -20,8 +22,13 @@ import (
     "github.com/wcharczuk/go-chart"
 )
 
-// Data Structures
+// Global variables for cached live data
+var (
+    latestLiveData LiveData
+    liveDataMutex  sync.Mutex
+)
 
+// Data Structures
 type HEXJSONEntry struct {
     CurrentDay     int     `json:"currentDay"`
     TshareRateHEX  float64 `json:"tshareRateHEX"`
@@ -51,13 +58,52 @@ type Config struct {
     LiveDataFrequency int `json:"liveDataFrequency"`
 }
 
-
-const dateLayout = "02-01-2006" // DD-MM-YYYY
+const dateLayout = "02-01-2006" // DD-MM-YYYY for storage and display
 const defaultLiveDataFrequency = 15 // Default frequency in minutes
 
+// Custom CanvasObject for triggering updates
+type updateTrigger struct {
+    widget.BaseWidget
+    onTapped func(*fyne.PointEvent)
+}
+
+type emptyRenderer struct {
+    trigger *updateTrigger
+}
+
+func (e *emptyRenderer) Layout(_ fyne.Size) {}
+func (e *emptyRenderer) MinSize() fyne.Size {
+    return fyne.NewSize(0, 0)
+}
+func (e *emptyRenderer) Refresh() {}
+func (e *emptyRenderer) ApplyTheme() {}
+func (e *emptyRenderer) BackgroundColor() fyne.ThemeColorName {
+    return "background"
+}
+func (e *emptyRenderer) Objects() []fyne.CanvasObject {
+    return nil
+}
+func (e *emptyRenderer) Destroy() {}
+
+func newUpdateTrigger() *updateTrigger {
+    t := &updateTrigger{}
+    t.ExtendBaseWidget(t)
+    return t
+}
+
+func (t *updateTrigger) CreateRenderer() fyne.WidgetRenderer {
+    return &emptyRenderer{trigger: t}
+}
+
+func (t *updateTrigger) Tapped(e *fyne.PointEvent) {
+    if t.onTapped != nil {
+        t.onTapped(e)
+    }
+}
+
+func (t *updateTrigger) TappedSecondary(_ *fyne.PointEvent) {}
 
 // Data Fetching and Management Functions
-
 func fetchHEXJSON() (HEXJSON, error) {
     resp, err := http.Get("https://hexdailystats.com/fulldatapulsechain")
     if err != nil {
@@ -73,7 +119,7 @@ func fetchHEXJSON() (HEXJSON, error) {
 }
 
 func fetchLiveData() (LiveData, error) {
-    resp, err := http.Get("https://hexdailystats.com/livedata")
+    resp, err := http.Get("https://hexFans.com/livedata")
     if err != nil {
         return LiveData{}, err
     }
@@ -202,7 +248,6 @@ func saveConfig(config Config) error {
 }
 
 // Utility Functions
-
 func isMatured(endDate string) (bool, error) {
     endTime, err := time.Parse(dateLayout, endDate)
     if err != nil {
@@ -250,7 +295,6 @@ func formatLongWithCommas(num int64) string {
 }
 
 // GUI Creation Functions
-
 func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.CanvasObject {
     if len(miners) == 0 {
         return widget.NewLabel("Empty profile. Please add HEX miners in Settings")
@@ -264,6 +308,12 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
     }
     totalLabel := widget.NewLabel(fmt.Sprintf("Total T-Shares: %.2f", totalTShares))
 
+    // Use cached live data
+    liveDataMutex.Lock()
+    price := latestLiveData.PricePulsechain
+    liveDataMutex.Unlock()
+    totalValueLabel := widget.NewLabel(fmt.Sprintf("Total T-Shares Value: $%.2f", totalTShares*price))
+
     activeBox := container.NewVBox()
     for i := range miners {
         if miners[i].Status != "completed" {
@@ -273,10 +323,11 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
             }
             var entry fyne.CanvasObject
             if matured {
+                idx := i // Capture i for closure
                 endButton := widget.NewButton("END", func() {
                     dialog.ShowConfirm("Congratulations!", "Have you ended the mining contract and minted HEX?", func(yes bool) {
                         if yes {
-                            miners[i].Status = "completed"
+                            miners[idx].Status = "completed"
                             if err := saveMiners(miners); err != nil {
                                 log.Println("Error saving miners:", err)
                             }
@@ -284,18 +335,14 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
                         }
                     }, w)
                 })
-                // Use container.NewMax to constrain button size
                 endButtonContainer := container.NewMax(endButton)
                 endButtonContainer.Resize(fyne.NewSize(60, 30))
 
                 label := widget.NewLabel(fmt.Sprintf("Miner: Start: %s, End: %s, T-Shares: %.2f (Matured)", miners[i].StartDate, miners[i].EndDate, miners[i].TShares))
                 label.TextStyle = fyne.TextStyle{Bold: true}
-                // Remove wrapping to prevent vertical character splitting
                 label.Wrapping = fyne.TextWrapOff
-                // Set label size to ensure sufficient width
                 label.Resize(fyne.NewSize(300, 30))
 
-                // Use HBox with centered alignment to keep button and label proportional
                 entry = container.NewHBox(label, endButtonContainer)
             } else {
                 days, _ := daysLeft(miners[i].EndDate)
@@ -305,16 +352,14 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
         }
     }
 
-    // Button to open completed miners window
     completedMinersButton := widget.NewButton("View Completed Miners", func() {
         completedMiners := []Miner{}
-        for _, miner := range miners {
-            if miner.Status == "completed" {
-                completedMiners = append(completedMiners, miner)
+        for j := range miners { // Use j to avoid conflict with i
+            if miners[j].Status == "completed" {
+                completedMiners = append(completedMiners, miners[j])
             }
         }
 
-        // Create new window for completed miners
         completedWindow := fyne.CurrentApp().NewWindow("Completed Miners")
         completedWindow.Resize(fyne.NewSize(600, 400))
 
@@ -324,20 +369,15 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
             return
         }
 
-        // Pagination setup
         const itemsPerPage = 10
         totalPages := (len(completedMiners) + itemsPerPage - 1) / itemsPerPage
         currentPage := 1
 
-        // Create container for miners
         minersBox := container.NewVBox()
-
-        // Create page label
         pageLabel := widget.NewLabel(fmt.Sprintf("Page %d of %d", currentPage, totalPages))
 
-        // Function to update displayed miners
         updateMiners := func() {
-            minersBox.Objects = nil // Clear existing labels
+            minersBox.Objects = nil
             startIndex := (currentPage - 1) * itemsPerPage
             endIndex := startIndex + itemsPerPage
             if endIndex > len(completedMiners) {
@@ -346,14 +386,13 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
             for i := startIndex; i < endIndex; i++ {
                 miner := completedMiners[i]
                 label := widget.NewLabel(fmt.Sprintf("Miner: Start: %s, End: %s, T-Shares: %.2f", miner.StartDate, miner.EndDate, miner.TShares))
-                label.Wrapping = fyne.TextWrapOff // Prevent text wrapping
+                label.Wrapping = fyne.TextWrapOff
                 minersBox.Add(label)
             }
             pageLabel.SetText(fmt.Sprintf("Page %d of %d", currentPage, totalPages))
             minersBox.Refresh()
         }
 
-        // Create navigation buttons
         var previousButton, nextButton *widget.Button
         previousButton = widget.NewButton("Previous", func() {
             if currentPage > 1 {
@@ -380,10 +419,8 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
             }
         })
 
-        // Initial population of miners
         updateMiners()
 
-        // Disable buttons as needed initially
         if currentPage == 1 {
             previousButton.Disable()
         }
@@ -391,18 +428,14 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
             nextButton.Disable()
         }
 
-        // Navigation bar
         navBar := container.NewHBox(previousButton, pageLabel, nextButton)
-
-        // Close button
         closeButton := widget.NewButton("Close", func() {
             completedWindow.Close()
         })
 
-        // Layout the window
         content := container.NewVBox(
             widget.NewLabel("Completed Miners"),
-            container.NewMax(minersBox), // Ensure minersBox takes available space
+            container.NewMax(minersBox),
             navBar,
             closeButton,
         )
@@ -411,60 +444,89 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
         completedWindow.Show()
     })
 
-    return container.NewVBox(totalLabel, widget.NewLabel("Active Miners"), activeBox, completedMinersButton)
+    return container.NewVBox(totalLabel, totalValueLabel, widget.NewLabel("Active Miners"), activeBox, completedMinersButton)
 }
 
 func createLiveDataTab() fyne.CanvasObject {
-    priceLabel := widget.NewLabel("HEX Price: $0.00")
+    priceLabel := widget.NewLabel("Price: $0.00")
     tsharePriceLabel := widget.NewLabel("T-Share Price: $0.00")
     tshareRateLabel := widget.NewLabel("T-Share Rate: 0")
     penaltiesLabel := widget.NewLabel("Penalties: 0")
     payoutLabel := widget.NewLabel("Payout Per T-Share: 0.0")
-    beatLabel := widget.NewLabel("Gas: 0")
+    beatLabel := widget.NewLabel("Beat: 0")
 
-    container := container.NewVBox(
+    // Channel to signal updates
+    updateChan := make(chan LiveData, 1)
+
+    // Custom trigger for updates
+    trigger := newUpdateTrigger()
+    trigger.Hide()
+
+    // Update labels when triggered (runs on main thread)
+    trigger.onTapped = func(_ *fyne.PointEvent) {
+        select {
+        case data := <-updateChan:
+            priceLabel.SetText(fmt.Sprintf("Price: $%.4f", data.PricePulsechain))
+            tsharePriceLabel.SetText(fmt.Sprintf("T-Share Price: $%.2f", data.TsharePricePulsechain))
+            tshareRateLabel.SetText(fmt.Sprintf("T-Share Rate: %s", formatWithCommas(int(data.TshareRateHEXPulsechain))))
+            penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
+            payoutLabel.SetText(fmt.Sprintf("Payout Per T-Share: %.1f", data.PayoutPerTsharePulsechain))
+            beatLabel.SetText(fmt.Sprintf("Beat: %s", formatLongWithCommas(data.Beat)))
+        default:
+            // No update pending
+        }
+    }
+
+    // Initial update
+    liveDataMutex.Lock()
+    data := latestLiveData
+    liveDataMutex.Unlock()
+    priceLabel.SetText(fmt.Sprintf("Price: $%.4f", data.PricePulsechain))
+    tsharePriceLabel.SetText(fmt.Sprintf("T-Share Price: $%.2f", data.TsharePricePulsechain))
+    tshareRateLabel.SetText(fmt.Sprintf("T-Share Rate: %s", formatWithCommas(int(data.TshareRateHEXPulsechain))))
+    penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
+    payoutLabel.SetText(fmt.Sprintf("Payout Per T-Share: %.1f", data.PayoutPerTsharePulsechain))
+    beatLabel.SetText(fmt.Sprintf("Beat: %s", formatLongWithCommas(data.Beat)))
+
+    // Start a ticker to periodically update the labels
+    ctx, cancel := context.WithCancel(context.Background())
+    go func() {
+        ticker := time.NewTicker(5 * time.Second) // Update every 5 seconds
+        defer ticker.Stop()
+        for {
+            select {
+            case <-ticker.C:
+                liveDataMutex.Lock()
+                data := latestLiveData
+                liveDataMutex.Unlock()
+                select {
+                case updateChan <- data: // Non-blocking send
+                    trigger.Tapped(&fyne.PointEvent{Position: fyne.NewPos(0, 0)})
+                default:
+                    // Skip if channel is full
+                }
+            case <-ctx.Done():
+                return
+            }
+        }
+    }()
+
+    // Stop the ticker when the window closes
+    fyne.CurrentApp().Lifecycle().SetOnStopped(cancel)
+
+    return container.NewVBox(
         priceLabel,
         tsharePriceLabel,
         tshareRateLabel,
         penaltiesLabel,
         payoutLabel,
         beatLabel,
+        trigger, // Include hidden trigger in the layout
     )
-
-    updateFunc := func() {
-        data, err := fetchLiveData()
-        if err != nil {
-            log.Println("Error fetching live data:", err)
-            return
-        }
-        priceLabel.SetText(fmt.Sprintf("HEX Price: $%.4f", data.PricePulsechain))
-        tsharePriceLabel.SetText(fmt.Sprintf("T-Share Price: $%.2f", data.TsharePricePulsechain))
-        tshareRateLabel.SetText(fmt.Sprintf("T-Share Rate: %s", formatWithCommas(int(data.TshareRateHEXPulsechain))))
-        penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
-        payoutLabel.SetText(fmt.Sprintf("Payout Per T-Share: %.1f", data.PayoutPerTsharePulsechain))
-        beatLabel.SetText(fmt.Sprintf("Gas: %s beats", formatLongWithCommas(data.Beat)))
-    }
-
-    updateFunc() // Initial update
-
-    go func() {
-        config, err := loadConfig()
-        if err != nil {
-            log.Println("Error loading config:", err)
-            config.LiveDataFrequency = defaultLiveDataFrequency
-        }
-        for {
-            time.Sleep(time.Duration(config.LiveDataFrequency) * time.Minute)
-            updateFunc()
-        }
-    }()
-
-    return container
 }
 
-
 func createChartTab() fyne.CanvasObject {
-    selectField := widget.NewSelect([]string{"Price", "Rate", "Payout"}, nil)
+    selectField := widget.NewSelect([]string{"pricePulseX", "tshareRateHEX", "dailyPayoutHEX"}, nil)
     chartImage := canvas.NewImageFromFile("") // Placeholder
     chartImage.FillMode = canvas.ImageFillContain
     chartImage.SetMinSize(fyne.NewSize(600, 400))
@@ -495,11 +557,11 @@ func createChartTab() fyne.CanvasObject {
         for i, entry := range data {
             graph.Series[0].(chart.ContinuousSeries).XValues[i] = float64(entry.CurrentDay)
             switch field {
-            case "Price":
+            case "pricePulseX":
                 graph.Series[0].(chart.ContinuousSeries).YValues[i] = entry.PricePulseX
-            case "Rate":
+            case "tshareRateHEX":
                 graph.Series[0].(chart.ContinuousSeries).YValues[i] = entry.TshareRateHEX
-            case "Payout":
+            case "dailyPayoutHEX":
                 graph.Series[0].(chart.ContinuousSeries).YValues[i] = entry.DailyPayoutHEX
             }
         }
@@ -514,46 +576,166 @@ func createChartTab() fyne.CanvasObject {
     }
 
     selectField.OnChanged = updateChart
-    updateChart("Price") // Default
+    updateChart("pricePulseX") // Default
 
     return container
 }
 
 func createSettingsTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.CanvasObject {
-    startDateEntry := widget.NewEntry()
-    startDateEntry.SetPlaceHolder("DD-MM-YYYY")
-    endDateEntry := widget.NewEntry()
-    endDateEntry.SetPlaceHolder("DD-MM-YYYY")
+    localMiners := miners // Explicitly use miners
+    startDateField := widget.NewEntry()
+    startDateField.SetPlaceHolder("Click to select Start Date")
+    startDateTap := widget.NewButton("", nil)
+    startDateTap.Importance = widget.LowImportance
+    startDateContainer := container.NewStack(startDateField, startDateTap)
+    endDateField := widget.NewEntry()
+    endDateField.SetPlaceHolder("Click to select End Date")
+    endDateTap := widget.NewButton("", nil)
+    endDateTap.Importance = widget.LowImportance
+    endDateContainer := container.NewStack(endDateField, endDateTap)
     tSharesEntry := widget.NewEntry()
     tSharesEntry.SetPlaceHolder("T-Shares")
 
+    tSharesEntry.Validator = func(s string) error {
+        if s == "" {
+            return fmt.Errorf("T-Shares is required")
+        }
+        val, err := strconv.ParseFloat(s, 64)
+        if err != nil {
+            return fmt.Errorf("T-Shares must be a valid number")
+        }
+        if val <= 0 {
+            return fmt.Errorf("T-Shares must be positive number")
+        }
+        return nil
+    }
+
+    showCalendarDialog := func(title string, field *widget.Entry, w fyne.Window) {
+        now := time.Now()
+        selectedDate := now
+        if field.Text != "" {
+            if parsed, err := time.Parse(dateLayout, field.Text); err == nil {
+                selectedDate = parsed
+            }
+        }
+
+        years := make([]string, 0, 11)
+        for y := 2020; y <= 2030; y++ {
+            years = append(years, strconv.Itoa(y))
+        }
+        yearSelect := widget.NewSelect(years, nil)
+        yearSelect.SetSelected(strconv.Itoa(selectedDate.Year()))
+
+        months := []string{
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December",
+        }
+        monthSelect := widget.NewSelect(months, nil)
+        monthSelect.SetSelected(months[selectedDate.Month()-1])
+
+        days := make([]string, 0, 31)
+        for d := 1; d <= 31; d++ {
+            days = append(days, strconv.Itoa(d))
+        }
+        daySelect := widget.NewSelect(days, nil)
+        daySelect.SetSelected(strconv.Itoa(selectedDate.Day()))
+
+        form := &widget.Form{
+            Items: []*widget.FormItem{
+                {Text: "Year", Widget: yearSelect},
+                {Text: "Month", Widget: monthSelect},
+                {Text: "Day", Widget: daySelect},
+            },
+            SubmitText: "Confirm",
+            CancelText: "Cancel",
+        }
+
+        d := dialog.NewCustomWithoutButtons(title, container.NewVBox(
+            widget.NewLabel("Select Date"),
+            form,
+        ), w)
+        form.OnSubmit = func() {
+            year, _ := strconv.Atoi(yearSelect.Selected)
+            monthIndex := 0
+            for i, m := range months {
+                if m == monthSelect.Selected {
+                    monthIndex = i + 1
+                    break
+                }
+            }
+            day, _ := strconv.Atoi(daySelect.Selected)
+
+            date, err := time.Parse("2006-1-2", fmt.Sprintf("%d-%d-%d", year, monthIndex, day))
+            if err != nil {
+                dialog.ShowError(fmt.Errorf("Invalid date: %s %s, %s", monthSelect.Selected, daySelect.Selected, yearSelect.Selected), w)
+                return
+            }
+
+            field.SetText(date.Format(dateLayout))
+            field.Refresh()
+            d.Hide()
+        }
+        form.OnCancel = func() {
+            d.Hide()
+        }
+        d.Show()
+    }
+
+    startDateTap.OnTapped = func() {
+        showCalendarDialog("Select Start Date", startDateField, w)
+    }
+    startDateField.OnSubmitted = func(_ string) {
+        showCalendarDialog("Select Start Date", startDateField, w)
+    }
+    endDateTap.OnTapped = func() {
+        showCalendarDialog("Select End Date", endDateField, w)
+    }
+    endDateField.OnSubmitted = func(_ string) {
+        showCalendarDialog("Select End Date", endDateField, w)
+    }
+
     addButton := widget.NewButton("Add Miner", func() {
-        startDate := startDateEntry.Text
-        endDate := endDateEntry.Text
+        if startDateField.Text == "" {
+            dialog.ShowError(fmt.Errorf("Start date is required"), w)
+            return
+        }
+        if endDateField.Text == "" {
+            dialog.ShowError(fmt.Errorf("End date is required"), w)
+            return
+        }
+        if _, err := time.Parse(dateLayout, startDateField.Text); err != nil {
+            dialog.ShowError(fmt.Errorf("Invalid start date format"), w)
+            return
+        }
+        if _, err := time.Parse(dateLayout, endDateField.Text); err != nil {
+            dialog.ShowError(fmt.Errorf("Invalid end date format"), w)
+            return
+        }
+        if tSharesEntry.Text == "" {
+            dialog.ShowError(fmt.Errorf("T-Shares is required"), w)
+            return
+        }
+        if err := tSharesEntry.Validate(); err != nil {
+            dialog.ShowError(err, w)
+            return
+        }
         tShares, err := strconv.ParseFloat(tSharesEntry.Text, 64)
         if err != nil {
             dialog.ShowError(fmt.Errorf("Invalid T-Shares: %v", err), w)
             return
         }
-        _, err1 := time.Parse(dateLayout, startDate)
-        _, err2 := time.Parse(dateLayout, endDate)
-        if err1 != nil || err2 != nil {
-            dialog.ShowError(fmt.Errorf("Invalid date format. Use DD-MM-YYYY"), w)
-            return
-        }
         newMiner := Miner{
-            StartDate: startDate,
-            EndDate:   endDate,
+            StartDate: startDateField.Text,
+            EndDate:   endDateField.Text,
             TShares:   tShares,
         }
-        miners = append(miners, newMiner)
-        if err := saveMiners(miners); err != nil {
+        localMiners = append(localMiners, newMiner)
+        if err := saveMiners(localMiners); err != nil {
             log.Println("Error saving miners:", err)
         }
         refreshTabs()
     })
 
-    // Load current config to display current frequency
     config, err := loadConfig()
     if err != nil {
         log.Println("Error loading config:", err)
@@ -579,20 +761,20 @@ func createSettingsTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.C
     })
 
     minersList := container.NewVBox()
-    for i := range miners {
-        i := i // Capture range variable
+    for i := range localMiners {
+        idx := i // Capture i for closure
         deleteButton := widget.NewButton("Delete", func() {
             dialog.ShowConfirm("Delete Miner", "Do you want to delete this HEX miner?", func(yes bool) {
                 if yes {
-                    miners = append(miners[:i], miners[i+1:]...)
-                    if err := saveMiners(miners); err != nil {
+                    localMiners = append(localMiners[:idx], localMiners[idx+1:]...)
+                    if err := saveMiners(localMiners); err != nil {
                         log.Println("Error saving miners:", err)
                     }
                     refreshTabs()
                 }
             }, w)
         })
-        minerLabel := widget.NewLabel(fmt.Sprintf("Start: %s, End: %s, T-Shares: %.2f", miners[i].StartDate, miners[i].EndDate, miners[i].TShares))
+        minerLabel := widget.NewLabel(fmt.Sprintf("Start: %s, End: %s, T-Shares: %.2f", localMiners[i].StartDate, localMiners[i].EndDate, localMiners[i].TShares))
         minersList.Add(container.NewHBox(minerLabel, deleteButton))
     }
 
@@ -600,9 +782,9 @@ func createSettingsTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.C
         widget.NewLabel("Live Data Settings"),
         frequencyEntry,
         saveFrequencyButton,
-        widget.NewLabel("\nAdd New Miner"),
-        startDateEntry,
-        endDateEntry,
+        widget.NewLabel("Add New Miner"),
+        startDateContainer,
+        endDateContainer,
         tSharesEntry,
         addButton,
         widget.NewLabel("Existing Miners"),
@@ -611,32 +793,65 @@ func createSettingsTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.C
 }
 
 // Main Function
-
 func main() {
-    // Initialize directories
     os.MkdirAll("data", 0755)
     os.MkdirAll("settings", 0755)
 
-    // Update historical data
     if err := updateLocalHEXJSON(); err != nil {
         log.Println("Error updating local HEXJSON:", err)
     }
 
-    // Load miners and handle initial setup
     miners, err := loadMiners()
     if err != nil {
         log.Println("Error loading miners:", err)
     }
 
-    // GUI Setup
+    config, err := loadConfig()
+    if err != nil {
+        log.Println("Error loading config:", err)
+        config.LiveDataFrequency = defaultLiveDataFrequency
+    }
+
+    // Initial fetch of live data at startup
+    data, err := fetchLiveData()
+    if err != nil {
+        log.Println("Error during initial live data fetch:", err)
+    } else {
+        liveDataMutex.Lock()
+        latestLiveData = data
+        liveDataMutex.Unlock()
+    }
+
+    // Start periodic live data fetching
+    go func() {
+        for {
+            // Reload config to pick up changes to LiveDataFrequency
+            config, err := loadConfig()
+            if err != nil {
+                log.Println("Error reloading config:", err)
+                config.LiveDataFrequency = defaultLiveDataFrequency
+            }
+
+            data, err := fetchLiveData()
+            if err != nil {
+                log.Println("Error fetching live data:", err)
+            } else {
+                liveDataMutex.Lock()
+                latestLiveData = data
+                liveDataMutex.Unlock()
+            }
+
+            time.Sleep(time.Duration(config.LiveDataFrequency) * time.Minute)
+        }
+    }()
+
     a := app.New()
-    w := a.NewWindow("HEXfetch")
+    w := a.NewWindow("HEX Stats")
     w.Resize(fyne.NewSize(800, 600))
 
-    // Refresh function to update tabs
     var refreshTabs func()
     refreshTabs = func() {
-        miners, _ = loadMiners() // Reload miners
+        miners, _ := loadMiners()
         profileTab := container.NewTabItem("Profile", createProfileTab(miners, w, refreshTabs))
         liveDataTab := container.NewTabItem("Live Data", createLiveDataTab())
         chartTab := container.NewTabItem("Chart", createChartTab())
@@ -645,7 +860,6 @@ func main() {
         w.SetContent(tabs)
     }
 
-    // Initial tab setup
     refreshTabs()
     w.ShowAndRun()
 }
