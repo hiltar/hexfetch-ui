@@ -17,8 +17,6 @@ For now, it only shows chart as image without any functions.
 
 Add pagination for Active Miners and Existing Miners.
 
-Update the `Total T-Shares Value` in Profile tab to be updated periodically from Live Data.
-
 ---
 
 # Build
