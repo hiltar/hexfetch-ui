@@ -308,11 +308,59 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
     }
     totalLabel := widget.NewLabel(fmt.Sprintf("Total T-Shares: %.2f", totalTShares))
 
-    // Use cached live data
+    // Create label for total value
+    totalValueLabel := widget.NewLabel("Total T-Shares Value: $0.00")
+
+    // Load initial config
+    config, err := loadConfig()
+    if err != nil {
+        log.Println("Error loading config:", err)
+        config.LiveDataFrequency = defaultLiveDataFrequency
+    }
+
+    // Update total value label with initial data
     liveDataMutex.Lock()
     price := latestLiveData.TsharePricePulsechain
     liveDataMutex.Unlock()
-    totalValueLabel := widget.NewLabel(fmt.Sprintf("Total T-Shares Value: $%.2f", totalTShares*price))
+    totalValueLabel.SetText(fmt.Sprintf("Total T-Shares Value: $%.2f", totalTShares*price))
+
+    // Start a ticker to periodically update the total value label
+    ctx, cancel := context.WithCancel(context.Background())
+    go func() {
+        // Initialize ticker with current frequency
+        ticker := time.NewTicker(time.Duration(config.LiveDataFrequency) * time.Minute)
+        lastFrequency := config.LiveDataFrequency
+        defer ticker.Stop()
+        for {
+            select {
+            case <-ticker.C:
+                // Reload config to check for frequency changes
+                config, err := loadConfig()
+                if err != nil {
+                    log.Println("Error reloading config:", err)
+                    config.LiveDataFrequency = defaultLiveDataFrequency
+                }
+                // Reset ticker if frequency has changed
+                if config.LiveDataFrequency != lastFrequency {
+                    ticker.Stop()
+                    ticker = time.NewTicker(time.Duration(config.LiveDataFrequency) * time.Minute)
+                    lastFrequency = config.LiveDataFrequency
+                }
+                liveDataMutex.Lock()
+                price := latestLiveData.TsharePricePulsechain
+                liveDataMutex.Unlock()
+                fyne.DoAndWait(func() {
+                    totalValueLabel.SetText(fmt.Sprintf("Total T-Shares Value: $%.2f", totalTShares*price))
+                })
+            case <-ctx.Done():
+                log.Println("Total value ticker stopped")
+                return
+            }
+        }
+    }()
+
+    // Stop the ticker when the app stops
+    fyne.CurrentApp().Lifecycle().SetOnStopped(cancel)
 
     activeBox := container.NewVBox()
     for i := range miners {
@@ -354,7 +402,7 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
 
     completedMinersButton := widget.NewButton("View Completed Miners", func() {
         completedMiners := []Miner{}
-        for j := range miners { // Use j to avoid conflict with i
+        for j := range miners {
             if miners[j].Status == "completed" {
                 completedMiners = append(completedMiners, miners[j])
             }
@@ -450,9 +498,9 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
 func createLiveDataTab() fyne.CanvasObject {
     priceLabel := widget.NewLabel("Price: $0.00")
     tsharePriceLabel := widget.NewLabel("T-Share Price: $0.00")
-    tshareRateLabel := widget.NewLabel("T-Share Rate: 0")
-    penaltiesLabel := widget.NewLabel("Penalties: $0")
-    payoutLabel := widget.NewLabel("Payout Per T-Share: 0.0")
+    tshareRateLabel := widget.NewLabel("T-Share Rate: 0 HEX")
+    penaltiesLabel := widget.NewLabel("Penalties: 0 HEX")
+    payoutLabel := widget.NewLabel("Payout Per T-Share: 0.0 HEX")
     beatLabel := widget.NewLabel("Beat: 0")
 
     // Initial update
@@ -480,9 +528,9 @@ func createLiveDataTab() fyne.CanvasObject {
                 fyne.DoAndWait(func() {
                     priceLabel.SetText(fmt.Sprintf("Price: $%.4f", data.PricePulsechain))
                     tsharePriceLabel.SetText(fmt.Sprintf("T-Share Price: $%.2f", data.TsharePricePulsechain))
-                    tshareRateLabel.SetText(fmt.Sprintf("T-Share Rate: %s", formatWithCommas(int(data.TshareRateHEXPulsechain))))
-                    penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
-                    payoutLabel.SetText(fmt.Sprintf("Payout Per T-Share: %.1f", data.PayoutPerTsharePulsechain))
+                    tshareRateLabel.SetText(fmt.Sprintf("T-Share Rate: %s HEX", formatWithCommas(int(data.TshareRateHEXPulsechain))))
+                    penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s HEX", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
+                    payoutLabel.SetText(fmt.Sprintf("Payout Per T-Share: %.1f HEX", data.PayoutPerTsharePulsechain))
                     beatLabel.SetText(fmt.Sprintf("Beat: %s", formatLongWithCommas(data.Beat)))
                 })
             case <-ctx.Done():
@@ -820,7 +868,6 @@ func main() {
                 latestLiveData = data
                 liveDataMutex.Unlock()
             }
-
             time.Sleep(time.Duration(config.LiveDataFrequency) * time.Minute)
         }
     }()
