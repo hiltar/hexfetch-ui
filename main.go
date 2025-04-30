@@ -451,7 +451,7 @@ func createLiveDataTab() fyne.CanvasObject {
     priceLabel := widget.NewLabel("Price: $0.00")
     tsharePriceLabel := widget.NewLabel("T-Share Price: $0.00")
     tshareRateLabel := widget.NewLabel("T-Share Rate: 0")
-    penaltiesLabel := widget.NewLabel("Penalties: 0")
+    penaltiesLabel := widget.NewLabel("Penalties: $0")
     payoutLabel := widget.NewLabel("Payout Per T-Share: 0.0")
     beatLabel := widget.NewLabel("Beat: 0")
 
@@ -461,9 +461,9 @@ func createLiveDataTab() fyne.CanvasObject {
     liveDataMutex.Unlock()
     priceLabel.SetText(fmt.Sprintf("Price: $%.4f", data.PricePulsechain))
     tsharePriceLabel.SetText(fmt.Sprintf("T-Share Price: $%.2f", data.TsharePricePulsechain))
-    tshareRateLabel.SetText(fmt.Sprintf("T-Share Rate: %s", formatWithCommas(int(data.TshareRateHEXPulsechain))))
-    penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
-    payoutLabel.SetText(fmt.Sprintf("Payout Per T-Share: %.1f", data.PayoutPerTsharePulsechain))
+    tshareRateLabel.SetText(fmt.Sprintf("T-Share Rate: %s HEX", formatWithCommas(int(data.TshareRateHEXPulsechain))))
+    penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s HEX", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
+    payoutLabel.SetText(fmt.Sprintf("Payout Per T-Share: %.1f HEX", data.PayoutPerTsharePulsechain))
     beatLabel.SetText(fmt.Sprintf("Beat: %s", formatLongWithCommas(data.Beat)))
 
     // Start a ticker to periodically update the labels
