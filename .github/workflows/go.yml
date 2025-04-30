@@ -10,6 +10,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Grant write access to repository contents for release uploads
     steps:
     - uses: actions/checkout@v4
 
