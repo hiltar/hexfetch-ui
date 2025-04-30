@@ -8,11 +8,15 @@ on:
     types: [created]
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgl1-mesa-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev pkg-config
 
     - name: Set up Go
       uses: actions/setup-go@v4
@@ -31,4 +35,3 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: hexfetch-ui
-      
