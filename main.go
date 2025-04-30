@@ -834,7 +834,7 @@ func main() {
         miners, _ = loadMiners()
         profileTab := container.NewTabItem("Profile", createProfileTab(miners, w, refreshTabs))
         liveDataTab := container.NewTabItem("Live Data", createLiveDataTab())
-        chartTab := container.NewTabItem("Chart", createChartTab())
+        //chartTab := container.NewTabItem("Chart", createChartTab())
         settingsTab := container.NewTabItem("Settings", createSettingsTab(miners, w, refreshTabs))
         tabs := container.NewAppTabs(profileTab, liveDataTab, settingsTab) // chartTab
         w.SetContent(tabs)
