@@ -31,6 +31,12 @@ jobs:
         go mod edit -droprequire fyne.io/fyne/v2
         go mod tidy
         go build -o hexfetch-ui
+
+    - name: Upload hexfetch-ui as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: hexfetch-ui
+        path: hexfetch-ui
     
     - name: Upload to GitHub Release
       if: github.event_name == 'release'
