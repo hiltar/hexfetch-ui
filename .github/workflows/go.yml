@@ -24,7 +24,7 @@ jobs:
         go mod edit -require fyne.io/fyne@v1.4.3
         go mod edit -droprequire fyne.io/fyne/v2
         go mod tidy
-        go build -o hexfetch-ui -v ./...
+        go build -o hexfetch-ui
     
     - name: Upload to GitHub Release
       if: github.event_name == 'release'
