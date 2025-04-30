@@ -21,7 +21,7 @@ jobs:
 
     - name: Init
       run: |
-        go init hexfetch-ui
+        go mod init hexfetch-ui
         go mod tidy
         
     - name: Build
