@@ -836,7 +836,7 @@ func main() {
         liveDataTab := container.NewTabItem("Live Data", createLiveDataTab())
         chartTab := container.NewTabItem("Chart", createChartTab())
         settingsTab := container.NewTabItem("Settings", createSettingsTab(miners, w, refreshTabs))
-        tabs := container.NewAppTabs(profileTab, liveDataTab, chartTab, settingsTab)
+        tabs := container.NewAppTabs(profileTab, liveDataTab, settingsTab) // chartTab
         w.SetContent(tabs)
     }
 
