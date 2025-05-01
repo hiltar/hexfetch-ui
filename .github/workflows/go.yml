@@ -23,7 +23,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.24'
+        go-version: '1.24.2'
 
     - name: Install fyne-cross
       run: |
@@ -40,8 +40,8 @@ jobs:
     - name: Upload hexfetch-ui AppImage as artifact
       uses: actions/upload-artifact@v4
       with:
-        name: hexfetch-ui-appimage
-        path: hexfetch-ui.AppImage
+        name: hexfetch-appimage
+        path: hexfetch.AppImage
 
     - name: Upload to GitHub Release
       if: github.event_name == 'release'
