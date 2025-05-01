@@ -11,7 +11,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # Grant write access to repository contents for release uploads
+      contents: write
     steps:
     - uses: actions/checkout@v4
 
@@ -24,23 +24,29 @@ jobs:
       uses: actions/setup-go@v4
       with:
         go-version: '1.24'
-        
-    - name: Build
+
+    - name: Install fyne-cross
+      run: |
+        go install github.com/fyne-io/fyne-cross@latest
+
+    - name: Build AppImage
       run: |
         go mod edit -require fyne.io/fyne@v1.4.3
         go mod edit -droprequire fyne.io/fyne/v2
         go mod tidy
-        go build -o hexfetch-ui
+        
+        fyne-cross linux -arch=amd64 -icon icon.png -name "Hexfetch UI" -appID com.example.hexfetch-ui
+        mv ./fyne-cross/dist/linux-amd64/*.AppImage hexfetch-ui.AppImage
 
-    - name: Upload hexfetch-ui as artifact
+    - name: Upload hexfetch-ui AppImage as artifact
       uses: actions/upload-artifact@v4
       with:
-        name: hexfetch-ui
-        path: hexfetch-ui
-    
+        name: hexfetch-ui-appimage
+        path: hexfetch-ui.AppImage
+
     - name: Upload to GitHub Release
       if: github.event_name == 'release'
       uses: softprops/action-gh-release@v2
       with:
-        files: hexfetch-ui
+        files: hexfetch-ui.AppImage
         draft: true
