@@ -34,9 +34,8 @@ jobs:
         go mod edit -require fyne.io/fyne@v1.4.3
         go mod edit -droprequire fyne.io/fyne/v2
         go mod tidy
-        
-        fyne-cross linux -arch=amd64 -icon icons/hexfetch.png -name "Hexfetch UI" -appID com.hexfetch-ui
-        mv ./fyne-cross/dist/linux-amd64/*.AppImage hexfetch-ui.AppImage
+        fyne-cross linux -arch=amd64 -icon icon.png -name "Hexfetch UI" -app-id com.hexfetch.ui
+        mv ./fyne-cross/dist/linux-amd64/*.AppImage hexfetch.AppImage
 
     - name: Upload hexfetch-ui AppImage as artifact
       uses: actions/upload-artifact@v4
@@ -48,5 +47,5 @@ jobs:
       if: github.event_name == 'release'
       uses: softprops/action-gh-release@v2
       with:
-        files: hexfetch-ui.AppImage
+        files: hexfetch.AppImage
         draft: true
