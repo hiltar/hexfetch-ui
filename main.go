@@ -327,31 +327,26 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
     // Start a ticker to periodically update the total value label
     ctx, cancel := context.WithCancel(context.Background())
     go func() {
-        // Initialize ticker with current frequency
         ticker := time.NewTicker(time.Duration(config.LiveDataFrequency) * time.Minute)
-        lastFrequency := config.LiveDataFrequency
         defer ticker.Stop()
         for {
             select {
             case <-ticker.C:
-                // Reload config to check for frequency changes
+                // Reload config to get latest frequency
                 config, err := loadConfig()
                 if err != nil {
                     log.Println("Error reloading config:", err)
                     config.LiveDataFrequency = defaultLiveDataFrequency
-                }
-                // Reset ticker if frequency has changed
-                if config.LiveDataFrequency != lastFrequency {
-                    ticker.Stop()
-                    ticker = time.NewTicker(time.Duration(config.LiveDataFrequency) * time.Minute)
-                    lastFrequency = config.LiveDataFrequency
                 }
                 liveDataMutex.Lock()
                 price := latestLiveData.TsharePricePulsechain
                 liveDataMutex.Unlock()
                 fyne.DoAndWait(func() {
                     totalValueLabel.SetText(fmt.Sprintf("Total T-Shares Value: $%.2f", totalTShares*price))
+                    totalValueLabel.Refresh() // Ensure UI refresh
                 })
+                // Adjust ticker for next iteration
+                ticker.Reset(time.Duration(config.LiveDataFrequency) * time.Minute)
             case <-ctx.Done():
                 log.Println("Total value ticker stopped")
                 return
