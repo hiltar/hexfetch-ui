@@ -11,6 +11,7 @@ import (
     "strconv"
     "sync"
     "time"
+    _ "embed"
 
     "fyne.io/fyne/v2"
     "fyne.io/fyne/v2/app"
@@ -21,6 +22,9 @@ import (
 
     "github.com/wcharczuk/go-chart"
 )
+
+//go:embed icon.png
+var appIcon []byte
 
 // Global variables for cached live data
 var (
@@ -924,6 +928,8 @@ func main() {
     }()
 
     a := app.New()
+    iconResource := fyne.NewStaticResource("icon.png", appIcon)
+    a.SetIcon(iconResource)
     w := a.NewWindow("HEX Stats")
     w.Resize(fyne.NewSize(800, 600))
 
