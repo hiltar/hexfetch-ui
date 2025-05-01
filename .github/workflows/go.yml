@@ -34,7 +34,7 @@ jobs:
         go mod edit -go=1.24
         go mod edit -require fyne.io/fyne/v2@v2.4.5
         go mod tidy
-        fyne-cross linux -arch=amd64 -icon icon.png -name "Hexfetch UI" -app-id com.hexfetch.ui -image fyneio/fyne-cross-images:base-latest
+        fyne-cross linux -arch=amd64 -icon icon.png -name "Hexfetch UI" -app-id com.hexfetch.ui -image golang:1.24
         mv ./fyne-cross/dist/linux-amd64/*.AppImage hexfetch.AppImage
 
     - name: Upload hexfetch-ui AppImage as artifact
