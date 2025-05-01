@@ -28,6 +28,48 @@ var (
     liveDataMutex  sync.Mutex
 )
 
+// ConfigManager for thread-safe configuration
+type ConfigManager struct {
+    mu          sync.RWMutex
+    config      Config
+    changeChans []chan struct{} // Channels for frequency change notifications
+}
+
+var configManager = &ConfigManager{
+    config: Config{LiveDataFrequency: defaultLiveDataFrequency},
+}
+
+func (cm *ConfigManager) GetLiveDataFrequency() int {
+    cm.mu.RLock()
+    defer cm.mu.RUnlock()
+    return cm.config.LiveDataFrequency
+}
+
+func (cm *ConfigManager) SetLiveDataFrequency(frequency int) {
+    cm.mu.Lock()
+    defer cm.mu.Unlock()
+    cm.config.LiveDataFrequency = frequency
+    log.Println("Set LiveDataFrequency to", frequency)
+    // Notify all subscribers
+    for i, ch := range cm.changeChans {
+        select {
+        case ch <- struct{}{}:
+            log.Println("Sent frequency change signal to subscriber", i)
+        default:
+            log.Println("Warning: Frequency change channel full for subscriber", i)
+        }
+    }
+}
+
+func (cm *ConfigManager) Subscribe() chan struct{} {
+    cm.mu.Lock()
+    defer cm.mu.Unlock()
+    ch := make(chan struct{}, 1) // Buffered to avoid blocking
+    cm.changeChans = append(cm.changeChans, ch)
+    log.Println("New subscriber added, total subscribers:", len(cm.changeChans))
+    return ch
+}
+
 // Data Structures
 type HEXJSONEntry struct {
     CurrentDay     int     `json:"currentDay"`
@@ -36,7 +78,7 @@ type HEXJSONEntry struct {
     PricePulseX    float64 `json:"pricePulseX"`
 }
 
-type HEXJSON []HEXJSONEntry // Define as a slice
+type HEXJSON []HEXJSONEntry
 
 type LiveData struct {
     PricePulsechain           float64 `json:"price_Pulsechain"`
@@ -311,13 +353,6 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
     // Create label for total value
     totalValueLabel := widget.NewLabel("Total T-Shares Value: $0.00")
 
-    // Load initial config
-    config, err := loadConfig()
-    if err != nil {
-        log.Println("Error loading config:", err)
-        config.LiveDataFrequency = defaultLiveDataFrequency
-    }
-
     // Update total value label with initial data
     liveDataMutex.Lock()
     price := latestLiveData.TsharePricePulsechain
@@ -327,28 +362,29 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
     // Start a ticker to periodically update the total value label
     ctx, cancel := context.WithCancel(context.Background())
     go func() {
-        ticker := time.NewTicker(time.Duration(config.LiveDataFrequency) * time.Minute)
+        frequency := configManager.GetLiveDataFrequency()
+        log.Println("Starting Profile tab ticker with frequency:", frequency, "minutes")
+        ticker := time.NewTicker(time.Duration(frequency) * time.Minute)
+        changeCh := configManager.Subscribe()
         defer ticker.Stop()
         for {
             select {
             case <-ticker.C:
-                // Reload config to get latest frequency
-                config, err := loadConfig()
-                if err != nil {
-                    log.Println("Error reloading config:", err)
-                    config.LiveDataFrequency = defaultLiveDataFrequency
-                }
                 liveDataMutex.Lock()
                 price := latestLiveData.TsharePricePulsechain
                 liveDataMutex.Unlock()
                 fyne.DoAndWait(func() {
                     totalValueLabel.SetText(fmt.Sprintf("Total T-Shares Value: $%.2f", totalTShares*price))
-                    totalValueLabel.Refresh() // Ensure UI refresh
+                    totalValueLabel.Refresh()
                 })
-                // Adjust ticker for next iteration
-                ticker.Reset(time.Duration(config.LiveDataFrequency) * time.Minute)
+                frequency = configManager.GetLiveDataFrequency()
+                ticker.Reset(time.Duration(frequency) * time.Minute)
+            case <-changeCh:
+                frequency = configManager.GetLiveDataFrequency()
+                log.Println("Profile tab ticker resetting to frequency:", frequency, "minutes")
+                ticker.Reset(time.Duration(frequency) * time.Minute)
             case <-ctx.Done():
-                log.Println("Total value ticker stopped")
+                log.Println("Profile tab ticker stopped")
                 return
             }
         }
@@ -493,9 +529,9 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
 func createLiveDataTab() fyne.CanvasObject {
     priceLabel := widget.NewLabel("Price: $0.00")
     tsharePriceLabel := widget.NewLabel("T-Share Price: $0.00")
-    tshareRateLabel := widget.NewLabel("T-Share Rate: 0 HEX")
-    penaltiesLabel := widget.NewLabel("Penalties: 0 HEX")
-    payoutLabel := widget.NewLabel("Payout Per T-Share: 0.0 HEX")
+    tshareRateLabel := widget.NewLabel("T-Share Rate: 0")
+    penaltiesLabel := widget.NewLabel("Penalties: $0")
+    payoutLabel := widget.NewLabel("Payout Per T-Share: 0.0")
     beatLabel := widget.NewLabel("Beat: 0")
 
     // Initial update
@@ -512,7 +548,10 @@ func createLiveDataTab() fyne.CanvasObject {
     // Start a ticker to periodically update the labels
     ctx, cancel := context.WithCancel(context.Background())
     go func() {
-        ticker := time.NewTicker(time.Minute) // Update every minute
+        frequency := configManager.GetLiveDataFrequency()
+        log.Println("Starting Live Data tab ticker with frequency:", frequency, "minutes")
+        ticker := time.NewTicker(time.Duration(frequency) * time.Minute)
+        changeCh := configManager.Subscribe()
         defer ticker.Stop()
         for {
             select {
@@ -527,15 +566,27 @@ func createLiveDataTab() fyne.CanvasObject {
                     penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s HEX", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
                     payoutLabel.SetText(fmt.Sprintf("Payout Per T-Share: %.1f HEX", data.PayoutPerTsharePulsechain))
                     beatLabel.SetText(fmt.Sprintf("Beat: %s", formatLongWithCommas(data.Beat)))
+                    priceLabel.Refresh()
+                    tsharePriceLabel.Refresh()
+                    tshareRateLabel.Refresh()
+                    penaltiesLabel.Refresh()
+                    payoutLabel.Refresh()
+                    beatLabel.Refresh()
                 })
+                frequency = configManager.GetLiveDataFrequency()
+                ticker.Reset(time.Duration(frequency) * time.Minute)
+            case <-changeCh:
+                frequency = configManager.GetLiveDataFrequency()
+                log.Println("Live Data tab ticker resetting to frequency:", frequency, "minutes")
+                ticker.Reset(time.Duration(frequency) * time.Minute)
             case <-ctx.Done():
-                log.Println("Ticker stopped")
+                log.Println("Live Data tab ticker stopped")
                 return
             }
         }
     }()
 
-    // Stop the ticker when the window closes
+    // Stop the ticker when the app stops
     fyne.CurrentApp().Lifecycle().SetOnStopped(cancel)
 
     return container.NewVBox(
@@ -605,7 +656,7 @@ func createChartTab() fyne.CanvasObject {
 }
 
 func createSettingsTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.CanvasObject {
-    localMiners := miners // Explicitly use miners
+    localMiners := miners
     startDateField := widget.NewEntry()
     startDateField.SetPlaceHolder("Click to select Start Date")
     startDateTap := widget.NewButton("", nil)
@@ -759,14 +810,9 @@ func createSettingsTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.C
         refreshTabs()
     })
 
-    config, err := loadConfig()
-    if err != nil {
-        log.Println("Error loading config:", err)
-        config.LiveDataFrequency = defaultLiveDataFrequency
-    }
     frequencyEntry := widget.NewEntry()
     frequencyEntry.SetPlaceHolder("Live Data Update Frequency (minutes)")
-    frequencyEntry.SetText(fmt.Sprintf("%d", config.LiveDataFrequency))
+    frequencyEntry.SetText(fmt.Sprintf("%d", configManager.GetLiveDataFrequency()))
 
     saveFrequencyButton := widget.NewButton("Save Frequency", func() {
         frequency, err := strconv.Atoi(frequencyEntry.Text)
@@ -774,12 +820,13 @@ func createSettingsTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.C
             dialog.ShowError(fmt.Errorf("Frequency must be a positive integer"), w)
             return
         }
-        config.LiveDataFrequency = frequency
+        config := Config{LiveDataFrequency: frequency}
         if err := saveConfig(config); err != nil {
             log.Println("Error saving config:", err)
             dialog.ShowError(fmt.Errorf("Failed to save frequency"), w)
             return
         }
+        configManager.SetLiveDataFrequency(frequency)
         dialog.ShowInformation("Success", fmt.Sprintf("Live data update frequency set to %d minutes", frequency), w)
     })
 
@@ -829,11 +876,13 @@ func main() {
         log.Println("Error loading miners:", err)
     }
 
+    // Load initial config and set in configManager
     config, err := loadConfig()
     if err != nil {
         log.Println("Error loading config:", err)
         config.LiveDataFrequency = defaultLiveDataFrequency
     }
+    configManager.SetLiveDataFrequency(config.LiveDataFrequency)
 
     // Initial fetch of live data at startup
     data, err := fetchLiveData()
@@ -847,23 +896,30 @@ func main() {
 
     // Start periodic live data fetching
     go func() {
+        frequency := configManager.GetLiveDataFrequency()
+        log.Println("Starting live data fetch ticker with frequency:", frequency, "minutes")
+        ticker := time.NewTicker(time.Duration(frequency) * time.Minute)
+        changeCh := configManager.Subscribe()
+        defer ticker.Stop()
         for {
-            // Reload config to pick up changes to LiveDataFrequency
-            config, err := loadConfig()
-            if err != nil {
-                log.Println("Error reloading config:", err)
-                config.LiveDataFrequency = defaultLiveDataFrequency
+            select {
+            case <-ticker.C:
+                data, err := fetchLiveData()
+                if err != nil {
+                    log.Println("Error fetching live data:", err)
+                } else {
+                    liveDataMutex.Lock()
+                    latestLiveData = data
+                    liveDataMutex.Unlock()
+                    log.Println("Updated latestLiveData with TsharePricePulsechain:", latestLiveData.TsharePricePulsechain)
+                }
+                frequency = configManager.GetLiveDataFrequency()
+                ticker.Reset(time.Duration(frequency) * time.Minute)
+            case <-changeCh:
+                frequency = configManager.GetLiveDataFrequency()
+                log.Println("Live data fetch ticker resetting to frequency:", frequency, "minutes")
+                ticker.Reset(time.Duration(frequency) * time.Minute)
             }
-
-            data, err := fetchLiveData()
-            if err != nil {
-                log.Println("Error fetching live data:", err)
-            } else {
-                liveDataMutex.Lock()
-                latestLiveData = data
-                liveDataMutex.Unlock()
-            }
-            time.Sleep(time.Duration(config.LiveDataFrequency) * time.Minute)
         }
     }()
 
@@ -873,6 +929,7 @@ func main() {
 
     var refreshTabs func()
     refreshTabs = func() {
+        log.Println("Refreshing tabs")
         miners, _ = loadMiners()
         profileTab := container.NewTabItem("Profile", createProfileTab(miners, w, refreshTabs))
         liveDataTab := container.NewTabItem("Live Data", createLiveDataTab())
