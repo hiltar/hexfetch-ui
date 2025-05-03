@@ -796,7 +796,6 @@ func createSettingsTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.C
         }
 
         d := dialog.NewCustomWithoutButtons(title, container.NewVBox(
-            widget.NewLabel("Select Date"),
             form,
         ), w)
         form.OnSubmit = func() {
