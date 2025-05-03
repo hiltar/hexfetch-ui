@@ -11,7 +11,7 @@ import (
     "strconv"
     "sync"
     "time"
-    _ "embed"
+     _ "embed"
 
     "fyne.io/fyne/v2"
     "fyne.io/fyne/v2/app"
@@ -58,7 +58,7 @@ func (cm *ConfigManager) SetLiveDataFrequency(frequency int) {
     for i, ch := range cm.changeChans {
         select {
         case ch <- struct{}{}:
-            log.Println("Sent frequency change signal to subscriber", i)
+            // log.Println("Sent frequency change signal to subscriber", i)
         default:
             log.Println("Warning: Frequency change channel full for subscriber", i)
         }
@@ -70,7 +70,7 @@ func (cm *ConfigManager) Subscribe() chan struct{} {
     defer cm.mu.Unlock()
     ch := make(chan struct{}, 1) // Buffered to avoid blocking
     cm.changeChans = append(cm.changeChans, ch)
-    log.Println("New subscriber added, total subscribers:", len(cm.changeChans))
+    // log.Println("New subscriber added, total subscribers:", len(cm.changeChans))
     return ch
 }
 
@@ -354,20 +354,15 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
     }
     totalLabel := widget.NewLabel(fmt.Sprintf("Total T-Shares: %.2f", totalTShares))
 
-    // Create label for total value
     totalValueLabel := widget.NewLabel("Total T-Shares Value: $0.00")
-
-    // Update total value label with initial data
     liveDataMutex.Lock()
     price := latestLiveData.TsharePricePulsechain
     liveDataMutex.Unlock()
     totalValueLabel.SetText(fmt.Sprintf("Total T-Shares Value: $%.2f", totalTShares*price))
 
-    // Start a ticker to periodically update the total value label
     ctx, cancel := context.WithCancel(context.Background())
     go func() {
         frequency := configManager.GetLiveDataFrequency()
-        log.Println("Starting Profile tab ticker with frequency:", frequency, "minutes")
         ticker := time.NewTicker(time.Duration(frequency) * time.Minute)
         changeCh := configManager.Subscribe()
         defer ticker.Stop()
@@ -385,7 +380,6 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
                 ticker.Reset(time.Duration(frequency) * time.Minute)
             case <-changeCh:
                 frequency = configManager.GetLiveDataFrequency()
-                log.Println("Profile tab ticker resetting to frequency:", frequency, "minutes")
                 ticker.Reset(time.Duration(frequency) * time.Minute)
             case <-ctx.Done():
                 log.Println("Profile tab ticker stopped")
@@ -393,24 +387,51 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
             }
         }
     }()
-
-    // Stop the ticker when the app stops
     fyne.CurrentApp().Lifecycle().SetOnStopped(cancel)
 
+    // Pagination for Active Miners
+    activeMiners := []Miner{}
+    for _, miner := range miners {
+        if miner.Status != "completed" {
+            activeMiners = append(activeMiners, miner)
+        }
+    }
+
+    const itemsPerPage = 5
+    totalPages := (len(activeMiners) + itemsPerPage - 1) / itemsPerPage
+    currentPage := 1
+
     activeBox := container.NewVBox()
-    for i := range miners {
-        if miners[i].Status != "completed" {
-            matured, err := isMatured(miners[i].EndDate)
+    pageLabel := widget.NewLabel(fmt.Sprintf("Page %d of %d", currentPage, totalPages))
+
+    updateActiveMiners := func() {
+        activeBox.Objects = nil
+        startIndex := (currentPage - 1) * itemsPerPage
+        endIndex := startIndex + itemsPerPage
+        if endIndex > len(activeMiners) {
+            endIndex = len(activeMiners)
+        }
+        for i := startIndex; i < endIndex; i++ {
+            miner := activeMiners[i]
+            var entry fyne.CanvasObject
+            matured, err := isMatured(miner.EndDate)
             if err != nil {
                 continue
             }
-            var entry fyne.CanvasObject
             if matured {
-                idx := i // Capture i for closure
+                idx := i // Adjusted index for activeMiners slice
                 endButton := widget.NewButton("END", func() {
                     dialog.ShowConfirm("Congratulations!", "Have you ended the mining contract and minted HEX?", func(yes bool) {
                         if yes {
-                            miners[idx].Status = "completed"
+                            // Find the original miner index in miners slice
+                            for j, m := range miners {
+                                if m.StartDate == activeMiners[idx].StartDate &&
+                                    m.EndDate == activeMiners[idx].EndDate &&
+                                    m.TShares == activeMiners[idx].TShares {
+                                    miners[j].Status = "completed"
+                                    break
+                                }
+                            }
                             if err := saveMiners(miners); err != nil {
                                 log.Println("Error saving miners:", err)
                             }
@@ -421,19 +442,58 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
                 endButtonContainer := container.NewMax(endButton)
                 endButtonContainer.Resize(fyne.NewSize(60, 30))
 
-                label := widget.NewLabel(fmt.Sprintf("Miner: Start: %s, End: %s, T-Shares: %.2f (Matured)", miners[i].StartDate, miners[i].EndDate, miners[i].TShares))
+                label := widget.NewLabel(fmt.Sprintf("Miner: Start: %s, End: %s, T-Shares: %.2f (Matured)", miner.StartDate, miner.EndDate, miner.TShares))
                 label.TextStyle = fyne.TextStyle{Bold: true}
                 label.Wrapping = fyne.TextWrapOff
                 label.Resize(fyne.NewSize(300, 30))
 
                 entry = container.NewHBox(label, endButtonContainer)
             } else {
-                days, _ := daysLeft(miners[i].EndDate)
-                entry = widget.NewLabel(fmt.Sprintf("Miner: Start: %s, End: %s, T-Shares: %.2f (%d days left)", miners[i].StartDate, miners[i].EndDate, miners[i].TShares, days))
+                days, _ := daysLeft(miner.EndDate)
+                entry = widget.NewLabel(fmt.Sprintf("Miner: Start: %s, End: %s, T-Shares: %.2f (%d days left)", miner.StartDate, miner.EndDate, miner.TShares, days))
             }
             activeBox.Add(entry)
         }
+        pageLabel.SetText(fmt.Sprintf("Page %d of %d", currentPage, totalPages))
+        activeBox.Refresh()
     }
+
+    var previousButton, nextButton *widget.Button
+    previousButton = widget.NewButton("Previous", func() {
+        if currentPage > 1 {
+            currentPage--
+            updateActiveMiners()
+            if currentPage == 1 {
+                previousButton.Disable()
+            }
+            if currentPage < totalPages {
+                nextButton.Enable()
+            }
+        }
+    })
+    nextButton = widget.NewButton("Next", func() {
+        if currentPage < totalPages {
+            currentPage++
+            updateActiveMiners()
+            if currentPage == totalPages {
+                nextButton.Disable()
+            }
+            if currentPage > 1 {
+                previousButton.Enable()
+            }
+        }
+    })
+
+    updateActiveMiners()
+
+    if currentPage == 1 {
+        previousButton.Disable()
+    }
+    if currentPage == totalPages || totalPages == 0 {
+        nextButton.Disable()
+    }
+
+    navBar := container.NewHBox(previousButton, pageLabel, nextButton)
 
     completedMinersButton := widget.NewButton("View Completed Miners", func() {
         completedMiners := []Miner{}
@@ -527,7 +587,14 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
         completedWindow.Show()
     })
 
-    return container.NewVBox(totalLabel, totalValueLabel, widget.NewLabel("Active Miners"), activeBox, completedMinersButton)
+    return container.NewVBox(
+        totalLabel,
+        totalValueLabel,
+        widget.NewLabel("Active Miners"),
+        activeBox,
+        navBar,
+        completedMinersButton,
+    )
 }
 
 func createLiveDataTab() fyne.CanvasObject {
@@ -553,7 +620,7 @@ func createLiveDataTab() fyne.CanvasObject {
     ctx, cancel := context.WithCancel(context.Background())
     go func() {
         frequency := configManager.GetLiveDataFrequency()
-        log.Println("Starting Live Data tab ticker with frequency:", frequency, "minutes")
+        // log.Println("Starting Live Data tab ticker with frequency:", frequency, "minutes")
         ticker := time.NewTicker(time.Duration(frequency) * time.Minute)
         changeCh := configManager.Subscribe()
         defer ticker.Stop()
@@ -581,7 +648,7 @@ func createLiveDataTab() fyne.CanvasObject {
                 ticker.Reset(time.Duration(frequency) * time.Minute)
             case <-changeCh:
                 frequency = configManager.GetLiveDataFrequency()
-                log.Println("Live Data tab ticker resetting to frequency:", frequency, "minutes")
+                // log.Println("Live Data tab ticker resetting to frequency:", frequency, "minutes")
                 ticker.Reset(time.Duration(frequency) * time.Minute)
             case <-ctx.Done():
                 log.Println("Live Data tab ticker stopped")
@@ -698,7 +765,7 @@ func createSettingsTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.C
         }
 
         years := make([]string, 0, 11)
-        for y := 2020; y <= 2030; y++ {
+        for y := 2019; y <= (now.AddDate(15, 2, 20).Year()); y++ {
             years = append(years, strconv.Itoa(y))
         }
         yearSelect := widget.NewSelect(years, nil)
@@ -834,23 +901,77 @@ func createSettingsTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.C
         dialog.ShowInformation("Success", fmt.Sprintf("Live data update frequency set to %d minutes", frequency), w)
     })
 
+    // Pagination for Existing Miners
+    const itemsPerPage = 5
+    totalPages := (len(localMiners) + itemsPerPage - 1) / itemsPerPage
+    currentPage := 1
+
     minersList := container.NewVBox()
-    for i := range localMiners {
-        idx := i // Capture i for closure
-        deleteButton := widget.NewButton("Delete", func() {
-            dialog.ShowConfirm("Delete Miner", "Do you want to delete this HEX miner?", func(yes bool) {
-                if yes {
-                    localMiners = append(localMiners[:idx], localMiners[idx+1:]...)
-                    if err := saveMiners(localMiners); err != nil {
-                        log.Println("Error saving miners:", err)
+    pageLabel := widget.NewLabel(fmt.Sprintf("Page %d of %d", currentPage, totalPages))
+
+    updateMinersList := func() {
+        minersList.Objects = nil
+        startIndex := (currentPage - 1) * itemsPerPage
+        endIndex := startIndex + itemsPerPage
+        if endIndex > len(localMiners) {
+            endIndex = len(localMiners)
+        }
+        for i := startIndex; i < endIndex; i++ {
+            idx := i
+            deleteButton := widget.NewButton("Delete", func() {
+                dialog.ShowConfirm("Delete Miner", "Do you want to delete this HEX miner?", func(yes bool) {
+                    if yes {
+                        localMiners = append(localMiners[:idx], localMiners[idx+1:]...)
+                        if err := saveMiners(localMiners); err != nil {
+                            log.Println("Error saving miners:", err)
+                        }
+                        refreshTabs()
                     }
-                    refreshTabs()
-                }
-            }, w)
-        })
-        minerLabel := widget.NewLabel(fmt.Sprintf("Start: %s, End: %s, T-Shares: %.2f", localMiners[i].StartDate, localMiners[i].EndDate, localMiners[i].TShares))
-        minersList.Add(container.NewHBox(minerLabel, deleteButton))
+                }, w)
+            })
+            minerLabel := widget.NewLabel(fmt.Sprintf("Start: %s, End: %s, T-Shares: %.2f", localMiners[i].StartDate, localMiners[i].EndDate, localMiners[i].TShares))
+            minersList.Add(container.NewHBox(minerLabel, deleteButton))
+        }
+        pageLabel.SetText(fmt.Sprintf("Page %d of %d", currentPage, totalPages))
+        minersList.Refresh()
     }
+
+    var previousButton, nextButton *widget.Button
+    previousButton = widget.NewButton("Previous", func() {
+        if currentPage > 1 {
+            currentPage--
+            updateMinersList()
+            if currentPage == 1 {
+                previousButton.Disable()
+            }
+            if currentPage < totalPages {
+                nextButton.Enable()
+            }
+        }
+    })
+    nextButton = widget.NewButton("Next", func() {
+        if currentPage < totalPages {
+            currentPage++
+            updateMinersList()
+            if currentPage == totalPages {
+                nextButton.Disable()
+            }
+            if currentPage > 1 {
+                previousButton.Enable()
+            }
+        }
+    })
+
+    updateMinersList()
+
+    if currentPage == 1 {
+        previousButton.Disable()
+    }
+    if currentPage == totalPages || totalPages == 0 {
+        nextButton.Disable()
+    }
+
+    navBar := container.NewHBox(previousButton, pageLabel, nextButton)
 
     return container.NewVBox(
         widget.NewLabel("Live Data Settings"),
@@ -863,6 +984,7 @@ func createSettingsTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.C
         addButton,
         widget.NewLabel("Existing Miners"),
         minersList,
+        navBar,
     )
 }
 
@@ -915,13 +1037,13 @@ func main() {
                     liveDataMutex.Lock()
                     latestLiveData = data
                     liveDataMutex.Unlock()
-                    log.Println("Updated latestLiveData with TsharePricePulsechain:", latestLiveData.TsharePricePulsechain)
+                    // log.Println("Updated latestLiveData with TsharePricePulsechain:", latestLiveData.TsharePricePulsechain)
                 }
                 frequency = configManager.GetLiveDataFrequency()
                 ticker.Reset(time.Duration(frequency) * time.Minute)
             case <-changeCh:
                 frequency = configManager.GetLiveDataFrequency()
-                log.Println("Live data fetch ticker resetting to frequency:", frequency, "minutes")
+                // log.Println("Live data fetch ticker resetting to frequency:", frequency, "minutes")
                 ticker.Reset(time.Duration(frequency) * time.Minute)
             }
         }
