@@ -15,6 +15,8 @@ settings directory contains user defined config.json and miners.json.
 Charts tab is disabled in the code because it's not ready.   
 For now, it only shows chart as image without any functions.
 
+Better UI/UX
+
 ---
 
 # Build
