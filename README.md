@@ -18,6 +18,9 @@ For now, it only shows chart as image without any functions.
 Better UI/UX   
 Optimization
 
+## Issues
+Interface may be frozen after adding miners
+
 ---
 
 # Build
