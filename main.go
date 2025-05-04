@@ -74,6 +74,7 @@ func (cm *ConfigManager) Subscribe() chan struct{} {
     return ch
 }
 
+
 // Data Structures
 type HEXJSONEntry struct {
     CurrentDay     int     `json:"currentDay"`
@@ -599,11 +600,28 @@ func createProfileTab(miners []Miner, w fyne.Window, refreshTabs func()) fyne.Ca
 
 func createLiveDataTab() fyne.CanvasObject {
     priceLabel := widget.NewLabel("Price: $0.00")
+    priceLabel.Alignment = fyne.TextAlignCenter
+    priceLabel.TextStyle = fyne.TextStyle{Bold: true}
+
     tsharePriceLabel := widget.NewLabel("T-Share Price: $0.00")
-    tshareRateLabel := widget.NewLabel("T-Share Rate: 0")
-    penaltiesLabel := widget.NewLabel("Penalties: $0")
-    payoutLabel := widget.NewLabel("Payout Per T-Share: 0.0")
+    tsharePriceLabel.Alignment = fyne.TextAlignCenter
+    tsharePriceLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+    tshareRateLabel := widget.NewLabel("T-Share Rate: 0 HEX")
+    tshareRateLabel.Alignment = fyne.TextAlignCenter
+    tshareRateLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+    payoutLabel := widget.NewLabel("Payout Per T-Share: 0.0 HEX")
+    payoutLabel.Alignment = fyne.TextAlignCenter
+    payoutLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+    penaltiesLabel := widget.NewLabel("Penalties: 0 HEX")
+    penaltiesLabel.Alignment = fyne.TextAlignCenter
+    penaltiesLabel.TextStyle = fyne.TextStyle{Bold: true}
+
     beatLabel := widget.NewLabel("Beat: 0")
+    beatLabel.Alignment = fyne.TextAlignCenter
+    beatLabel.TextStyle = fyne.TextStyle{Bold: true}
 
     // Initial update
     liveDataMutex.Lock()
@@ -612,15 +630,14 @@ func createLiveDataTab() fyne.CanvasObject {
     priceLabel.SetText(fmt.Sprintf("Price: $%.4f", data.PricePulsechain))
     tsharePriceLabel.SetText(fmt.Sprintf("T-Share Price: $%.2f", data.TsharePricePulsechain))
     tshareRateLabel.SetText(fmt.Sprintf("T-Share Rate: %s HEX", formatWithCommas(int(data.TshareRateHEXPulsechain))))
-    penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s HEX", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
     payoutLabel.SetText(fmt.Sprintf("Payout Per T-Share: %.1f HEX", data.PayoutPerTsharePulsechain))
+    penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s HEX", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
     beatLabel.SetText(fmt.Sprintf("Beat: %s", formatLongWithCommas(data.Beat)))
 
     // Start a ticker to periodically update the labels
     ctx, cancel := context.WithCancel(context.Background())
     go func() {
         frequency := configManager.GetLiveDataFrequency()
-        // log.Println("Starting Live Data tab ticker with frequency:", frequency, "minutes")
         ticker := time.NewTicker(time.Duration(frequency) * time.Minute)
         changeCh := configManager.Subscribe()
         defer ticker.Stop()
@@ -634,21 +651,20 @@ func createLiveDataTab() fyne.CanvasObject {
                     priceLabel.SetText(fmt.Sprintf("Price: $%.4f", data.PricePulsechain))
                     tsharePriceLabel.SetText(fmt.Sprintf("T-Share Price: $%.2f", data.TsharePricePulsechain))
                     tshareRateLabel.SetText(fmt.Sprintf("T-Share Rate: %s HEX", formatWithCommas(int(data.TshareRateHEXPulsechain))))
-                    penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s HEX", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
                     payoutLabel.SetText(fmt.Sprintf("Payout Per T-Share: %.1f HEX", data.PayoutPerTsharePulsechain))
+                    penaltiesLabel.SetText(fmt.Sprintf("Penalties: %s HEX", formatWithCommas(int(data.PenaltiesHEXPulsechain))))
                     beatLabel.SetText(fmt.Sprintf("Beat: %s", formatLongWithCommas(data.Beat)))
                     priceLabel.Refresh()
                     tsharePriceLabel.Refresh()
                     tshareRateLabel.Refresh()
-                    penaltiesLabel.Refresh()
                     payoutLabel.Refresh()
+                    penaltiesLabel.Refresh()
                     beatLabel.Refresh()
                 })
                 frequency = configManager.GetLiveDataFrequency()
                 ticker.Reset(time.Duration(frequency) * time.Minute)
             case <-changeCh:
                 frequency = configManager.GetLiveDataFrequency()
-                // log.Println("Live Data tab ticker resetting to frequency:", frequency, "minutes")
                 ticker.Reset(time.Duration(frequency) * time.Minute)
             case <-ctx.Done():
                 log.Println("Live Data tab ticker stopped")
@@ -660,14 +676,18 @@ func createLiveDataTab() fyne.CanvasObject {
     // Stop the ticker when the app stops
     fyne.CurrentApp().Lifecycle().SetOnStopped(cancel)
 
-    return container.NewVBox(
-        priceLabel,
-        tsharePriceLabel,
-        tshareRateLabel,
-        penaltiesLabel,
-        payoutLabel,
-        beatLabel,
+    content := container.NewVBox(
+        container.NewPadded(priceLabel),
+        container.NewPadded(tsharePriceLabel),
+        container.NewPadded(tshareRateLabel),
+        container.NewPadded(payoutLabel),
+        container.NewPadded(penaltiesLabel),
+        container.NewPadded(beatLabel),
     )
+
+    centeredContent := container.NewCenter(content)
+
+    return centeredContent
 }
 
 func createChartTab() fyne.CanvasObject {
