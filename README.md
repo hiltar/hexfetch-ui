@@ -54,6 +54,10 @@ Live Data tab shows periodically fetched data from Pulsechain API.
 ![Live Data tab](https://github.com/user-attachments/assets/d8cbe7d5-4343-427a-a190-483e9370abf2)
 
 
+# Charts
+Not yet implemented
+
+
 ## Settings
 Settings tab shows:  
   - Live Data Settings for changing the frequency of fetching data (in minutes)  
